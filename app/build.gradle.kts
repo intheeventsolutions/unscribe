@@ -8,6 +8,32 @@ plugins {
 // Without them, release builds fall back to the debug key.
 val keystorePath: String? = System.getenv("UNSCRIBE_KEYSTORE")
 
+// sherpa-onnx isn't on Maven Central; fetch the release AAR into app/libs (gitignored).
+val sherpaVersion = "1.13.8"
+val sherpaAar = file("libs/sherpa-onnx-$sherpaVersion.aar")
+
+val fetchSherpaOnnx by tasks.registering {
+    outputs.file(sherpaAar)
+    onlyIf { !sherpaAar.exists() }
+    doLast {
+        sherpaAar.parentFile.mkdirs()
+        val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/sherpa-onnx-$sherpaVersion.aar"
+        logger.lifecycle("Downloading $url")
+        uri(url).toURL().openStream().use { input -> sherpaAar.outputStream().use { input.copyTo(it) } }
+    }
+}
+
+val checkVoiceAssets by tasks.registering {
+    val model = file("src/main/assets/voice/en_AU-librivox-medium.onnx")
+    doLast {
+        if (!model.exists()) {
+            throw GradleException("Voice model missing. Run: python3 scripts/prepare_voice.py (see README)")
+        }
+    }
+}
+
+tasks.named("preBuild") { dependsOn(fetchSherpaOnnx, checkVoiceAssets) }
+
 android {
     namespace = "au.com.intheevent.unscribe"
     compileSdk = 35
@@ -68,6 +94,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(files(sherpaAar))
 
     testImplementation(libs.junit)
 }

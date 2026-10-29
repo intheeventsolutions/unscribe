@@ -4,8 +4,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import au.com.intheevent.unscribe.ui.HomeScreen
 import au.com.intheevent.unscribe.ui.UnscribeTheme
+import au.com.intheevent.unscribe.ui.VoiceTestScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -13,7 +13,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             UnscribeTheme {
-                HomeScreen()
+                VoiceTestScreen()
             }
         }
     }
