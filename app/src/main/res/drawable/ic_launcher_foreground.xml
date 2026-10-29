@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Open book with a sound wave: 108dp adaptive icon, art kept inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#F4EBDD"
+        android:pathData="M30,40 Q42,36 53,42 L53,72 Q42,66 30,70 Z" />
+    <path
+        android:fillColor="#F4EBDD"
+        android:pathData="M55,42 Q66,36 78,40 L78,70 Q66,66 55,72 Z" />
+    <path
+        android:strokeColor="#E8A33D"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M60,57 L60,57 M65,52 L65,62 M70,49 L70,65 M75,54 L75,60" />
+</vector>
