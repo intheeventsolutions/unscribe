@@ -2,6 +2,7 @@ package au.com.intheevent.unscribe.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,6 +75,9 @@ import java.io.File
 /** Where Play will start: a word within a sentence within a paragraph. */
 data class StartPoint(val paragraph: Int, val sentence: Int, val word: Int = 0)
 
+/** The cursor's line within its paragraph, in pixels from the paragraph's top. */
+private data class CursorLine(val paragraph: Int, val top: Float, val bottom: Float)
+
 private class OpenBook(val entity: BookEntity, val parser: EpubParser)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -99,6 +103,7 @@ fun ReaderScreen(library: Library, narrator: Narrator, bookId: Long, onBack: () 
     var jumpTo by remember { mutableStateOf<StartPoint?>(StartPoint(book.entity.paragraphIndex, book.entity.sentenceIndex, book.entity.wordIndex)) }
     var marker by remember { mutableStateOf(jumpTo) }
     var showContents by remember { mutableStateOf(false) }
+    var cursorLine by remember { mutableStateOf<CursorLine?>(null) }
 
     val paragraphs by produceState<List<String>?>(null, chapter) {
         value = null
@@ -192,14 +197,24 @@ fun ReaderScreen(library: Library, narrator: Narrator, bookId: Long, onBack: () 
                 }
         }
 
-        // Turn the page when reading moves into a paragraph that's off screen. Only on
-        // paragraph changes, so you can scroll around while listening.
-        val followParagraph = narration.position?.takeIf { playingHere && it.chapter == chapter }?.paragraph
-        LaunchedEffect(followParagraph) {
-            followParagraph ?: return@LaunchedEffect
-            if (listState.layoutInfo.visibleItemsInfo.none { it.index == followParagraph }) {
-                listState.animateScrollToItem(followParagraph)
+        // Turn the page with the reading: when the line being read nears the bottom of
+        // the screen (or is off it), scroll it to near the top. Leaves you alone while
+        // you're scrolling by hand.
+        // Keyed on the paragraph and line, not the word, so a page turn isn't cut short.
+        val reading = narration.position?.takeIf { playingHere && it.chapter == chapter }?.copy(sentence = 0, word = 0)
+        LaunchedEffect(reading, cursorLine) {
+            reading ?: return@LaunchedEffect
+            if (listState.isScrollInProgress) return@LaunchedEffect
+            val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == reading.paragraph }
+            val line = cursorLine?.takeIf { it.paragraph == reading.paragraph }
+            if (item == null || line == null) {
+                if (item == null) listState.animateScrollToItem(reading.paragraph)
+                return@LaunchedEffect
             }
+            val height = listState.layoutInfo.viewportSize.height
+            val top = item.offset + line.top
+            val bottom = item.offset + line.bottom
+            if (bottom > height * 0.9f || top < 0) listState.animateScrollBy(top - height * 0.2f)
         }
 
         LazyColumn(
@@ -212,6 +227,7 @@ fun ReaderScreen(library: Library, narrator: Narrator, bookId: Long, onBack: () 
                 Paragraph(
                     text = text,
                     mark = marker?.takeIf { it.paragraph == index },
+                    onCursorLine = { top, bottom -> cursorLine = CursorLine(index, top, bottom) },
                     onTapWord = { sentence, word ->
                         val tapped = StartPoint(index, sentence, word)
                         if (playingHere) {
@@ -262,7 +278,12 @@ private fun startPoint(state: LazyListState, marker: StartPoint?, paragraphCount
  * not a highlight) and a bar in the margin beside its line.
  */
 @Composable
-private fun Paragraph(text: String, mark: StartPoint?, onTapWord: (sentence: Int, word: Int) -> Unit) {
+private fun Paragraph(
+    text: String,
+    mark: StartPoint?,
+    onCursorLine: (top: Float, bottom: Float) -> Unit,
+    onTapWord: (sentence: Int, word: Int) -> Unit,
+) {
     val sentences: List<Sentence> = remember(text) { SentenceSplitter.split(text) }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current
@@ -274,6 +295,12 @@ private fun Paragraph(text: String, mark: StartPoint?, onTapWord: (sentence: Int
         val words = WordTiming.words(sentence.text(text))
         val word = words.getOrNull(mark.word) ?: words.firstOrNull() ?: return@remember null
         (sentence.start + word.start) until (sentence.start + word.end)
+    }
+
+    val result = layout
+    if (result != null && cursor != null) {
+        val line = result.getLineForOffset(cursor.first.coerceAtMost(text.length - 1))
+        LaunchedEffect(result, line) { onCursorLine(result.getLineTop(line), result.getLineBottom(line)) }
     }
 
     Row(Modifier.fillMaxWidth()) {
