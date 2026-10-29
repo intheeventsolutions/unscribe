@@ -5,6 +5,7 @@ import android.os.PowerManager
 import au.com.intheevent.unscribe.data.BookEntity
 import au.com.intheevent.unscribe.data.Library
 import au.com.intheevent.unscribe.epub.EpubParser
+import au.com.intheevent.unscribe.text.WordTiming
 import au.com.intheevent.unscribe.tts.PcmPlayer
 import au.com.intheevent.unscribe.tts.SherpaPiperEngine
 import au.com.intheevent.unscribe.tts.Voice
@@ -31,6 +32,8 @@ data class NarratorState(
     val chapterTitle: String? = null,
     /** The sentence being heard (or that will be heard next, when paused). */
     val position: Position? = null,
+    /** Estimated word being spoken, as a character range in the position's paragraph. Null when not speaking. */
+    val word: IntRange? = null,
     /** The user wants audio; may still be [buffering]. */
     val playing: Boolean = false,
     val buffering: Boolean = false,
@@ -94,7 +97,7 @@ class Narrator(context: Context, private val library: Library) {
 
     fun pause() {
         stopSession()
-        _state.update { it.copy(playing = false, buffering = false) }
+        _state.update { it.copy(playing = false, buffering = false, word = null) }
         wakeLock.release()
     }
 
@@ -125,7 +128,7 @@ class Narrator(context: Context, private val library: Library) {
 
     private suspend fun moveTo(position: Position) {
         val title = parser?.book?.chapters?.getOrNull(position.chapter)?.title
-        _state.update { it.copy(position = position, chapterTitle = title, ended = false) }
+        _state.update { it.copy(position = position, chapterTitle = title, ended = false, word = null) }
         state.value.book?.let { library.savePosition(it.id, position.chapter, position.paragraph, position.sentence) }
     }
 
@@ -133,16 +136,17 @@ class Narrator(context: Context, private val library: Library) {
         val c = cursor ?: return@coroutineScope
         withContext(ttsDispatcher) { engine.load() }
         val audio = PcmPlayer(engine.sampleRate).also { player = it }
-        // (first frame of the sentence, sentence), in playback order.
-        val markers = ArrayDeque<Pair<Long, Position>>()
+        val markers = ArrayDeque<Marker>()
         val voice = voice
         val speed = speed
 
-        val utterances = Channel<Pair<Position, FloatArray>>(capacity = 2)
+        val utterances = Channel<Utterance>(capacity = 2)
         launch(ttsDispatcher) {
             var pos = c.normalize(start)
             while (pos != null && isActive) {
-                utterances.send(pos to engine.synthesize(c.text(pos), voice, speed))
+                val text = c.text(pos)
+                val samples = engine.synthesize(text, voice, speed)
+                utterances.send(Utterance(pos, samples, WordTiming.words(text), c.sentenceStart(pos)))
                 pos = c.next(pos)
             }
             utterances.close()
@@ -151,10 +155,12 @@ class Narrator(context: Context, private val library: Library) {
         val ticker = launch {
             while (isActive) {
                 val played = audio.framesPlayed
-                val heard = synchronized(markers) { markers.lastOrNull { it.first <= played }?.second }
-                if (heard != null && (heard != state.value.position || state.value.buffering)) {
-                    _state.update { it.copy(buffering = false) }
+                val marker = synchronized(markers) { markers.lastOrNull { it.startFrame <= played } }
+                if (marker != null) {
+                    val heard = marker.utterance.position
                     if (heard != state.value.position) moveTo(heard)
+                    val word = marker.utterance.wordAt((played - marker.startFrame).toFloat() / marker.utterance.samples.size)
+                    _state.update { it.copy(buffering = false, word = word) }
                 }
                 delay(TICK_MS)
             }
@@ -162,15 +168,15 @@ class Narrator(context: Context, private val library: Library) {
 
         try {
             withContext(Dispatchers.IO) {
-                for ((pos, samples) in utterances) {
-                    synchronized(markers) { markers.addLast(audio.framesWritten to pos) }
-                    audio.play(samples)
+                for (utterance in utterances) {
+                    synchronized(markers) { markers.addLast(Marker(audio.framesWritten, utterance)) }
+                    audio.play(utterance.samples)
                 }
                 // Let the tail of the last sentence finish.
                 while (isActive && audio.framesPlayed < audio.framesWritten) delay(TICK_MS)
             }
             ticker.cancel()
-            _state.update { it.copy(playing = false, buffering = false, ended = true) }
+            _state.update { it.copy(playing = false, buffering = false, ended = true, word = null) }
             wakeLock.release()
         } finally {
             ticker.cancel()
@@ -180,8 +186,25 @@ class Narrator(context: Context, private val library: Library) {
         }
     }
 
+    private class Utterance(
+        val position: Position,
+        val samples: FloatArray,
+        val words: List<WordTiming.Word>,
+        /** Offset of the sentence within its paragraph, to place [words] in the reader. */
+        val sentenceStart: Int,
+    ) {
+        fun wordAt(fraction: Float): IntRange? {
+            val word = words.getOrNull(WordTiming.indexAt(words, fraction)) ?: return null
+            return (sentenceStart + word.start) until (sentenceStart + word.end)
+        }
+    }
+
+    /** An utterance and the audio frame it starts at. */
+    private class Marker(val startFrame: Long, val utterance: Utterance)
+
     private companion object {
-        const val TICK_MS = 150L
+        // Short enough for the word cursor to keep pace with speech.
+        const val TICK_MS = 60L
         // Safety net in case a pause is somehow missed; re-acquired on every play.
         const val WAKE_LOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000L
     }

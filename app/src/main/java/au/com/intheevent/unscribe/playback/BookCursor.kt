@@ -1,6 +1,7 @@
 package au.com.intheevent.unscribe.playback
 
 import au.com.intheevent.unscribe.epub.EpubParser
+import au.com.intheevent.unscribe.text.Sentence
 import au.com.intheevent.unscribe.text.SentenceSplitter
 import java.util.concurrent.ConcurrentHashMap
 
@@ -11,14 +12,23 @@ data class Position(val chapter: Int, val paragraph: Int, val sentence: Int)
 class BookCursor(private val parser: EpubParser) {
     private val chapterCount = parser.book.chapters.size
 
-    /** chapter -> paragraphs -> sentence texts. */
-    private val cache = ConcurrentHashMap<Int, List<List<String>>>()
-
-    private fun chapter(index: Int): List<List<String>> = cache.getOrPut(index) {
-        parser.paragraphs(index).map { paragraph -> SentenceSplitter.split(paragraph).map { it.text(paragraph) } }
+    private class Paragraph(val text: String, val sentences: List<Sentence>) {
+        val size get() = sentences.size
     }
 
-    fun text(position: Position): String = chapter(position.chapter)[position.paragraph][position.sentence]
+    private val cache = ConcurrentHashMap<Int, List<Paragraph>>()
+
+    private fun chapter(index: Int): List<Paragraph> = cache.getOrPut(index) {
+        parser.paragraphs(index).map { Paragraph(it, SentenceSplitter.split(it)) }
+    }
+
+    fun text(position: Position): String = sentence(position).let { (paragraph, range) -> range.text(paragraph.text) }
+
+    /** Where the sentence starts within its paragraph's text. */
+    fun sentenceStart(position: Position): Int = sentence(position).second.start
+
+    private fun sentence(position: Position): Pair<Paragraph, Sentence> =
+        chapter(position.chapter)[position.paragraph].let { it to it.sentences[position.sentence] }
 
     /** [position] if it points at a sentence, otherwise the next one that does; null past the end. */
     fun normalize(position: Position): Position? {
@@ -52,8 +62,8 @@ class BookCursor(private val parser: EpubParser) {
                 if (c < 0) return position
                 p = chapter(c).size - 1
             }
-            val sentences = chapter(c)[p]
-            if (sentences.isNotEmpty()) return Position(c, p, sentences.size - 1)
+            val sentences = chapter(c)[p].size
+            if (sentences > 0) return Position(c, p, sentences - 1)
         }
     }
 

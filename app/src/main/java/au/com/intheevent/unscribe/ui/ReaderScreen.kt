@@ -44,6 +44,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
@@ -208,6 +211,9 @@ fun ReaderScreen(library: Library, narrator: Narrator, bookId: Long, onBack: () 
                 Paragraph(
                     text = text,
                     markedSentence = marker?.takeIf { it.paragraph == index }?.sentence,
+                    cursorWord = narration.word?.takeIf {
+                        playingHere && narration.position?.let { p -> p.chapter == chapter && p.paragraph == index } == true
+                    },
                     onTapSentence = { sentence ->
                         val tapped = StartPoint(index, sentence)
                         if (playingHere) {
@@ -254,17 +260,18 @@ private fun startPoint(state: LazyListState, marker: StartPoint?, paragraphCount
 }
 
 @Composable
-private fun Paragraph(text: String, markedSentence: Int?, onTapSentence: (Int) -> Unit) {
+private fun Paragraph(text: String, markedSentence: Int?, cursorWord: IntRange?, onTapSentence: (Int) -> Unit) {
     val sentences: List<Sentence> = remember(text) { SentenceSplitter.split(text) }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current
+    val cursorColor = MaterialTheme.colorScheme.primary
 
     Row(Modifier.fillMaxWidth()) {
         Box(Modifier.width(20.dp)) {
             val result = layout
             val sentence = markedSentence?.let { sentences.getOrNull(it) }
             if (result != null && sentence != null) {
-                val line = result.getLineForOffset(sentence.start)
+                val line = result.getLineForOffset(cursorWord?.first ?: sentence.start)
                 val top = with(density) { result.getLineTop(line).toDp() }
                 val height = with(density) { (result.getLineBottom(line) - result.getLineTop(line)).toDp() }
                 Box(
@@ -281,7 +288,16 @@ private fun Paragraph(text: String, markedSentence: Int?, onTapSentence: (Int) -
             text = text,
             style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, fontSize = 19.sp, lineHeight = 30.sp),
             onTextLayout = { layout = it },
-            modifier = Modifier.weight(1f).pointerInput(text) {
+            modifier = Modifier.weight(1f).drawBehind {
+                // A thin underline under the word being spoken: a cursor, not a highlight.
+                val result = layout ?: return@drawBehind
+                val word = cursorWord?.takeIf { it.last < text.length } ?: return@drawBehind
+                val line = result.getLineForOffset(word.first)
+                val left = result.getBoundingBox(word.first).left
+                val right = if (result.getLineForOffset(word.last) == line) result.getBoundingBox(word.last).right else result.getLineRight(line)
+                val y = result.getLineBaseline(line) + 4.dp.toPx()
+                drawLine(cursorColor, Offset(left, y), Offset(right, y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+            }.pointerInput(text) {
                 detectTapGestures { position ->
                     val offset = layout?.getOffsetForPosition(position) ?: return@detectTapGestures
                     val index = sentences.indexOfLast { it.start <= offset }.coerceAtLeast(0)

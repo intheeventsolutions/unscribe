@@ -11,6 +11,8 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -27,7 +29,8 @@ class NarratorPlayer(private val narrator: Narrator) : SimpleBasePlayer(Looper.g
     private val scope = MainScope()
 
     init {
-        scope.launch { narrator.state.collect { invalidateState() } }
+        // The word cursor changes several times a second; media controls don't care.
+        scope.launch { narrator.state.map { it.copy(word = null) }.distinctUntilChanged().collect { invalidateState() } }
     }
 
     override fun getState(): State {
