@@ -97,6 +97,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(files(sherpaAar))
     implementation(libs.jsoup)
+    implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.common)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
