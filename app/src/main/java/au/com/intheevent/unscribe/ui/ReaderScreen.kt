@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -35,7 +34,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -44,6 +44,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
@@ -55,12 +58,15 @@ import au.com.intheevent.unscribe.data.BookEntity
 import au.com.intheevent.unscribe.data.Library
 import au.com.intheevent.unscribe.epub.EpubParser
 import au.com.intheevent.unscribe.epub.TocEntry
+import au.com.intheevent.unscribe.playback.Narrator
+import au.com.intheevent.unscribe.playback.Position
 import au.com.intheevent.unscribe.text.Sentence
 import au.com.intheevent.unscribe.text.SentenceSplitter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -71,7 +77,7 @@ private class OpenBook(val entity: BookEntity, val parser: EpubParser)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReaderScreen(library: Library, bookId: Long, onBack: () -> Unit) {
+fun ReaderScreen(library: Library, narrator: Narrator, bookId: Long, onBack: () -> Unit) {
     val open by produceState<OpenBook?>(null, bookId) {
         val entity = library.get(bookId) ?: return@produceState
         library.markOpened(bookId)
@@ -81,6 +87,11 @@ fun ReaderScreen(library: Library, bookId: Long, onBack: () -> Unit) {
     }
     val book = open ?: return Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
     val chapters = book.parser.book.chapters
+    val scope = rememberCoroutineScope()
+    val controller = rememberMediaController()
+    val narration by narrator.state.collectAsState()
+    val narrating = narration.book?.id == bookId
+    val playingHere = narrating && narration.playing
 
     var chapter by remember { mutableIntStateOf(book.entity.chapterIndex.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))) }
     // Set when jumping somewhere; the list starts there and the marker shows it.
@@ -92,11 +103,39 @@ fun ReaderScreen(library: Library, bookId: Long, onBack: () -> Unit) {
         value = null
         value = withContext(Dispatchers.IO) { if (chapters.isEmpty()) emptyList() else book.parser.paragraphs(chapter) }
     }
+    // Not composed until the paragraphs load, so the initial index applies to the real list.
+    val listState = remember(chapter) { LazyListState(firstVisibleItemIndex = jumpTo?.paragraph ?: 0) }
 
     fun goToChapter(index: Int) {
         chapter = index
         jumpTo = null
         marker = null
+    }
+
+    // Follow the narrator: the marker sits on the sentence being read (or where it
+    // paused), and the reader turns chapters with it.
+    LaunchedEffect(narration.position, narrating) {
+        val pos = narration.position ?: return@LaunchedEffect
+        if (!narrating) return@LaunchedEffect
+        if (pos.chapter != chapter) {
+            if (!narration.playing) return@LaunchedEffect
+            chapter = pos.chapter
+            jumpTo = StartPoint(pos.paragraph, pos.sentence)
+        }
+        marker = StartPoint(pos.paragraph, pos.sentence)
+    }
+
+    fun playPause() {
+        if (playingHere) {
+            controller?.pause() ?: narrator.pause()
+            return
+        }
+        val count = paragraphs?.size ?: return
+        val start = startPoint(listState, marker, count)
+        scope.launch {
+            narrator.open(bookId, Position(chapter, start.paragraph, start.sentence))
+            controller?.play() ?: narrator.play()
+        }
     }
 
     Scaffold(
@@ -124,48 +163,76 @@ fun ReaderScreen(library: Library, bookId: Long, onBack: () -> Unit) {
                 },
             )
         },
+        bottomBar = {
+            PlayerBar(
+                playing = playingHere,
+                buffering = playingHere && narration.buffering,
+                canSkip = narrating,
+                onPlayPause = ::playPause,
+                onBack = { narrator.skip(-1) },
+                onForward = { narrator.skip(1) },
+            )
+        },
     ) { padding ->
         val list = paragraphs
         if (list == null) {
             Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) { CircularProgressIndicator() }
             return@Scaffold
         }
-        key(chapter) {
-            val listState = rememberLazyListState(initialFirstVisibleItemIndex = jumpTo?.paragraph?.coerceIn(0, list.size) ?: 0)
 
-            LaunchedEffect(listState) {
-                snapshotFlow { startPoint(listState, marker, list.size) }
-                    .distinctUntilChanged()
-                    .collectLatest { start ->
-                        delay(400)
-                        library.savePosition(book.entity.id, chapter, start.paragraph, start.sentence)
-                    }
+        LaunchedEffect(listState) {
+            snapshotFlow { startPoint(listState, marker, list.size) }
+                .distinctUntilChanged()
+                .collectLatest { start ->
+                    delay(400)
+                    // While reading, the narrator saves the sentence actually heard.
+                    if (narrator.state.value.let { it.playing && it.book?.id == bookId }) return@collectLatest
+                    library.savePosition(book.entity.id, chapter, start.paragraph, start.sentence)
+                }
+        }
+
+        // Turn the page when reading moves into a paragraph that's off screen. Only on
+        // paragraph changes, so you can scroll around while listening.
+        val followParagraph = narration.position?.takeIf { playingHere && it.chapter == chapter }?.paragraph
+        LaunchedEffect(followParagraph) {
+            followParagraph ?: return@LaunchedEffect
+            if (listState.layoutInfo.visibleItemsInfo.none { it.index == followParagraph }) {
+                listState.animateScrollToItem(followParagraph)
             }
+        }
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(start = 4.dp, end = 24.dp, top = 8.dp, bottom = 48.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                itemsIndexed(list) { index, text ->
-                    Paragraph(
-                        text = text,
-                        markedSentence = marker?.takeIf { it.paragraph == index }?.sentence,
-                        onTapSentence = { sentence ->
-                            val tapped = StartPoint(index, sentence)
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(start = 4.dp, end = 24.dp, top = 8.dp, bottom = 48.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            itemsIndexed(list) { index, text ->
+                Paragraph(
+                    text = text,
+                    markedSentence = marker?.takeIf { it.paragraph == index }?.sentence,
+                    cursorWord = narration.word?.takeIf {
+                        playingHere && narration.position?.let { p -> p.chapter == chapter && p.paragraph == index } == true
+                    },
+                    onTapSentence = { sentence ->
+                        val tapped = StartPoint(index, sentence)
+                        if (playingHere) {
+                            // Tapping while listening jumps the reading there.
+                            marker = tapped
+                            scope.launch { narrator.open(bookId, Position(chapter, index, sentence)) }
+                        } else {
                             marker = if (marker == tapped) null else tapped
-                        },
-                    )
-                }
-                item {
-                    ChapterFooter(
-                        hasPrevious = chapter > 0,
-                        hasNext = chapter < chapters.size - 1,
-                        onPrevious = { goToChapter(chapter - 1) },
-                        onNext = { goToChapter(chapter + 1) },
-                    )
-                }
+                        }
+                    },
+                )
+            }
+            item {
+                ChapterFooter(
+                    hasPrevious = chapter > 0,
+                    hasNext = chapter < chapters.size - 1,
+                    onPrevious = { goToChapter(chapter - 1) },
+                    onNext = { goToChapter(chapter + 1) },
+                )
             }
         }
     }
@@ -175,6 +242,7 @@ fun ReaderScreen(library: Library, bookId: Long, onBack: () -> Unit) {
             Contents(book.parser, current = chapter) { index ->
                 showContents = false
                 goToChapter(index)
+                if (playingHere) scope.launch { narrator.open(bookId, Position(index, 0, 0)) }
             }
         }
     }
@@ -192,17 +260,18 @@ private fun startPoint(state: LazyListState, marker: StartPoint?, paragraphCount
 }
 
 @Composable
-private fun Paragraph(text: String, markedSentence: Int?, onTapSentence: (Int) -> Unit) {
+private fun Paragraph(text: String, markedSentence: Int?, cursorWord: IntRange?, onTapSentence: (Int) -> Unit) {
     val sentences: List<Sentence> = remember(text) { SentenceSplitter.split(text) }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current
+    val cursorColor = MaterialTheme.colorScheme.primary
 
     Row(Modifier.fillMaxWidth()) {
         Box(Modifier.width(20.dp)) {
             val result = layout
             val sentence = markedSentence?.let { sentences.getOrNull(it) }
             if (result != null && sentence != null) {
-                val line = result.getLineForOffset(sentence.start)
+                val line = result.getLineForOffset(cursorWord?.first ?: sentence.start)
                 val top = with(density) { result.getLineTop(line).toDp() }
                 val height = with(density) { (result.getLineBottom(line) - result.getLineTop(line)).toDp() }
                 Box(
@@ -219,7 +288,16 @@ private fun Paragraph(text: String, markedSentence: Int?, onTapSentence: (Int) -
             text = text,
             style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, fontSize = 19.sp, lineHeight = 30.sp),
             onTextLayout = { layout = it },
-            modifier = Modifier.weight(1f).pointerInput(text) {
+            modifier = Modifier.weight(1f).drawBehind {
+                // A thin underline under the word being spoken: a cursor, not a highlight.
+                val result = layout ?: return@drawBehind
+                val word = cursorWord?.takeIf { it.last < text.length } ?: return@drawBehind
+                val line = result.getLineForOffset(word.first)
+                val left = result.getBoundingBox(word.first).left
+                val right = if (result.getLineForOffset(word.last) == line) result.getBoundingBox(word.last).right else result.getLineRight(line)
+                val y = result.getLineBaseline(line) + 4.dp.toPx()
+                drawLine(cursorColor, Offset(left, y), Offset(right, y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+            }.pointerInput(text) {
                 detectTapGestures { position ->
                     val offset = layout?.getOffsetForPosition(position) ?: return@detectTapGestures
                     val index = sentences.indexOfLast { it.start <= offset }.coerceAtLeast(0)

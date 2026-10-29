@@ -10,7 +10,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import au.com.intheevent.unscribe.data.Library
 import au.com.intheevent.unscribe.ui.LibraryScreen
 import au.com.intheevent.unscribe.ui.ReaderScreen
 import au.com.intheevent.unscribe.ui.UnscribeTheme
@@ -20,7 +19,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val library = Library(applicationContext)
+        val app = application as UnscribeApp
         setContent {
             UnscribeTheme {
                 var openBookId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -34,10 +33,10 @@ class MainActivity : ComponentActivity() {
                     }
                     bookId != null -> {
                         BackHandler { openBookId = null }
-                        ReaderScreen(library, bookId, onBack = { openBookId = null })
+                        ReaderScreen(app.library, app.narrator, bookId, onBack = { openBookId = null })
                     }
                     else -> LibraryScreen(
-                        library,
+                        app.library,
                         onOpen = { openBookId = it.id },
                         onSettings = { showVoiceTest = true },
                     )
