@@ -10,7 +10,7 @@ A small, personal Android app that reads epub books aloud in a natural female Au
 - Tap anywhere in the text to choose where reading starts (defaults to the top of the page), then press Play. No distracting highlighting.
 - Keeps reading with the screen off; controls on the lock screen, notification, headphones, Bluetooth and car.
 - Adjustable speed (0.75x – 2x) without the chipmunk effect.
-- Choice of six female Australian voices, or the phone's built-in voice as a fallback.
+- Choice of six female Australian voices (Tully by default), or the phone's built-in voice as a fallback.
 
 ## Installing on your phone
 
@@ -18,7 +18,7 @@ A small, personal Android app that reads epub books aloud in a natural female Au
 2. Open the downloaded file. Android will ask to allow installs from your browser ("Install unknown apps"); allow it once.
 3. Tap **Install**. Future versions install over the top and keep your library, because every release is signed with the same key.
 
-Requirements: Android 8.0 or later, 64-bit ARM phone (practically every phone from the last several years), about 200 MB free.
+Requirements: Android 8.0 or later, 64-bit ARM phone (practically every phone from the last several years), about 250 MB free (the APK is ~120 MB, mostly the voice).
 
 ## Using the app
 
@@ -79,7 +79,12 @@ On the phone: **Settings → About phone → tap Build number 7 times**, then **
 git clone git@github.com:intheeventsolutions/unscribe.git
 cd unscribe
 echo "sdk.dir=$HOME/Android/Sdk" > local.properties   # only needed if ANDROID_HOME isn't set
-./gradlew test assembleDebug
+
+# One-off: download the Australian voice and convert it for sherpa-onnx (~80 MB download)
+python3 -m venv ~/.venvs/unscribe && ~/.venvs/unscribe/bin/pip install onnx
+~/.venvs/unscribe/bin/python scripts/prepare_voice.py
+
+./gradlew test assembleDebug   # also downloads the sherpa-onnx library into app/libs on first run
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
