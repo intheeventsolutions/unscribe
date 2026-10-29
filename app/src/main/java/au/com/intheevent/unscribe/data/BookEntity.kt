@@ -17,4 +17,5 @@ data class BookEntity(
     val chapterIndex: Int = 0,
     val paragraphIndex: Int = 0,
     val sentenceIndex: Int = 0,
+    val wordIndex: Int = 0,
 )

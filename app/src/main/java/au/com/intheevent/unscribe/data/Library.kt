@@ -58,6 +58,6 @@ class Library(private val context: Context) {
 
     suspend fun markOpened(id: Long) = dao.markOpened(id, System.currentTimeMillis())
 
-    suspend fun savePosition(id: Long, chapter: Int, paragraph: Int, sentence: Int) =
-        dao.savePosition(id, chapter, paragraph, sentence)
+    suspend fun savePosition(id: Long, chapter: Int, paragraph: Int, sentence: Int, word: Int) =
+        dao.savePosition(id, chapter, paragraph, sentence, word)
 }

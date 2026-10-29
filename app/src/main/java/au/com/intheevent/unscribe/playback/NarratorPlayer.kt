@@ -29,8 +29,10 @@ class NarratorPlayer(private val narrator: Narrator) : SimpleBasePlayer(Looper.g
     private val scope = MainScope()
 
     init {
-        // The word cursor changes several times a second; media controls don't care.
-        scope.launch { narrator.state.map { it.copy(word = null) }.distinctUntilChanged().collect { invalidateState() } }
+        // The position moves word by word, several times a second; media controls don't care.
+        scope.launch {
+            narrator.state.map { it.copy(position = it.position?.copy(word = 0)) }.distinctUntilChanged().collect { invalidateState() }
+        }
     }
 
     override fun getState(): State {
