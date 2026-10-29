@@ -5,8 +5,8 @@ import au.com.intheevent.unscribe.text.Sentence
 import au.com.intheevent.unscribe.text.SentenceSplitter
 import java.util.concurrent.ConcurrentHashMap
 
-/** A sentence in a book. */
-data class Position(val chapter: Int, val paragraph: Int, val sentence: Int)
+/** A word in a book: the [word]th word (see WordTiming) of a sentence. */
+data class Position(val chapter: Int, val paragraph: Int, val sentence: Int, val word: Int = 0)
 
 /** Walks a book sentence by sentence, across paragraph and chapter boundaries. Thread-safe. */
 class BookCursor(private val parser: EpubParser) {
@@ -37,7 +37,10 @@ class BookCursor(private val parser: EpubParser) {
         while (c < chapterCount) {
             val paragraphs = chapter(c)
             while (p < paragraphs.size) {
-                if (s < paragraphs[p].size) return Position(c, p, s)
+                if (s < paragraphs[p].size) {
+                    val unchanged = c == position.chapter && p == position.paragraph && s == position.sentence
+                    return if (unchanged) position else Position(c, p, s)
+                }
                 p++
                 s = 0
             }
@@ -48,11 +51,16 @@ class BookCursor(private val parser: EpubParser) {
         return null
     }
 
+    /** Start of the next sentence. */
     fun next(position: Position): Position? =
-        normalize(position.copy(sentence = position.sentence + 1))
+        normalize(Position(position.chapter, position.paragraph, position.sentence + 1))
 
-    /** The sentence before [position], or [position] itself at the very start. */
+    /**
+     * Start of the current sentence if [position] is partway through it, otherwise the
+     * start of the previous one (or [position] itself at the very start of the book).
+     */
     fun previous(position: Position): Position {
+        if (position.word > 0) return position.copy(word = 0)
         var (c, p, s) = position
         if (s > 0) return Position(c, p, s - 1)
         while (true) {

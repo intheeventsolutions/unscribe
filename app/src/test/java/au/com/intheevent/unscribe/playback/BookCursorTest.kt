@@ -40,6 +40,14 @@ class BookCursorTest {
     }
 
     @Test
+    fun wordPositionsSurviveNormalizeAndStepBySentence() {
+        val mid = Position(2, 3, 0, word = 4)
+        assertEquals(mid, cursor.normalize(mid))
+        assertEquals(mid.copy(word = 0), cursor.previous(mid))
+        assertEquals(0, cursor.next(mid)!!.word)
+    }
+
+    @Test
     fun previousStopsAtTheStart() {
         val first = cursor.normalize(Position(0, 0, 0))!!
         assertEquals(first, cursor.previous(first))

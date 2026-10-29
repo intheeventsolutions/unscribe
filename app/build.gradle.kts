@@ -5,7 +5,7 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// Release signing comes from env vars (set by CI from GitHub secrets, or exported locally).
+// Release signing comes from env vars exported locally (see README, Releasing).
 // Without them, release builds fall back to the debug key.
 val keystorePath: String? = System.getenv("UNSCRIBE_KEYSTORE")
 

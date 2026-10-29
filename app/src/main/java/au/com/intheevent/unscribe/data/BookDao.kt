@@ -24,7 +24,8 @@ interface BookDao {
     suspend fun markOpened(id: Long, at: Long)
 
     @Query(
-        "UPDATE books SET chapterIndex = :chapter, paragraphIndex = :paragraph, sentenceIndex = :sentence WHERE id = :id",
+        "UPDATE books SET chapterIndex = :chapter, paragraphIndex = :paragraph, sentenceIndex = :sentence, " +
+            "wordIndex = :word WHERE id = :id",
     )
-    suspend fun savePosition(id: Long, chapter: Int, paragraph: Int, sentence: Int)
+    suspend fun savePosition(id: Long, chapter: Int, paragraph: Int, sentence: Int, word: Int)
 }

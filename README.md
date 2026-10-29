@@ -112,38 +112,39 @@ scripts/      one-off tooling (voice model preparation)
 ## Workflow
 
 - Work happens on `feat/...` or `fix/...` branches, merged to `main` via pull request.
-- GitHub Actions runs the unit tests and builds a debug APK on every PR (download it from the run's **Artifacts**).
+- There's no CI: run `./gradlew test assembleDebug` locally before opening a PR, and try the build on the phone.
 
 ## Releasing
 
-One-time: create a signing key and store it in GitHub secrets. Keep the `.jks` file and passwords somewhere safe; losing them means reinstalling from scratch (and losing the library).
+Releases are built and published from this machine.
+
+One-time: create a signing key. Keep the `.jks` file and passwords somewhere safe (outside the repo); losing them means future versions can't install over the top, so you'd have to uninstall and lose the library.
 
 ```sh
 mkdir -p ~/keys
 keytool -genkeypair -v -keystore ~/keys/unscribe.jks -alias unscribe -keyalg RSA -keysize 4096 -validity 36500
-gh secret set KEYSTORE_B64 --body "$(base64 -w0 ~/keys/unscribe.jks)"
-gh secret set KEYSTORE_PASSWORD
-gh secret set KEY_ALIAS --body unscribe
-gh secret set KEY_PASSWORD
 ```
 
-Each release: bump `versionCode`/`versionName` in `app/build.gradle.kts`, merge, then
+Each release: bump `versionCode` and `versionName` in `app/build.gradle.kts`, merge, then from an up-to-date `main`:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+export UNSCRIBE_KEYSTORE=~/keys/unscribe.jks UNSCRIBE_KEY_ALIAS=unscribe
+read -rs -p "Keystore password: " UNSCRIBE_KEYSTORE_PASSWORD && export UNSCRIBE_KEYSTORE_PASSWORD UNSCRIBE_KEY_PASSWORD=$UNSCRIBE_KEYSTORE_PASSWORD
+./gradlew test assembleRelease
+cp app/build/outputs/apk/release/app-release.apk unscribe-v0.1.0.apk
+gh release create v0.1.0 unscribe-v0.1.0.apk --generate-notes
 ```
 
-CI builds the signed APK and attaches it to a new GitHub release.
-
-To build a signed release locally, export `UNSCRIBE_KEYSTORE`, `UNSCRIBE_KEYSTORE_PASSWORD`, `UNSCRIBE_KEY_ALIAS` and `UNSCRIBE_KEY_PASSWORD`, then run `./gradlew assembleRelease`.
+`gh release create` tags the current commit and attaches the APK to a new GitHub release.
 
 ## Roadmap
 
-1. Project setup, CI, README
+1. Project setup, README
 2. On-device Australian voice (Piper model via sherpa-onnx) with a test screen
 3. Epub parsing, library and reader screens
 4. Background playback, media controls, tap-to-start, remembering your place
-5. Speed and voice settings, audio focus, signed releases
+5. Word-by-word position and word cursor
+6. Speed and voice settings, audio focus, signed releases
 
 ## Credits and licences
 
